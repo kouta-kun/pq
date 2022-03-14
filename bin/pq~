@@ -1,0 +1,85 @@
+#!/usr/bin/env python
+
+import pickle
+import pprint
+import sys
+import functools
+
+def keys(d, _):
+    if type(d) is list:
+        return list(range(len(d)))
+    else:
+        return list(d.keys())
+
+keys.test = lambda call: call == 'keys'
+
+def flat(items, _):
+    return sum((list(i) for i in items), [])
+
+flat.test = lambda call: call == '.[]'
+
+def accessor(d, key):
+    key = key[1:]
+    if key[0] == '[' and key[-1] == ']':
+        key = eval(key[1:-1])
+        return d[key]
+    else:
+        return getattr(d,key)
+
+def center_pad(string, length):
+    padding = length - len(string)
+    left_padding = padding//2
+    right_padding = left_padding + (1 if (padding%2) == 1 else 0)
+    string = (' '*left_padding) + string + (' '*right_padding)
+    assert len(string) == length, f'{len(string)} != {length} // {padding}'
+    return string
+    
+def table(items, _):
+    keys_items = [set(item.keys()) for item in items]
+    keys_items = sorted(functools.reduce(lambda x,y:x&y, keys_items))
+
+    table_values = {k: [repr(item[k]) for item in items] for k in keys_items}
+
+    table_lengths = {k: max(len(k), *[len(v) for v in table_values[k]]) for k in keys_items}
+
+    table_header = "|" + '|'.join([center_pad(k, table_lengths[k]) for k in keys_items]) + '|'
+    table_rows = ["|" + '|'.join([center_pad(repr(item[k]), table_lengths[k]) for k in keys_items]) + '|' for item in items]
+
+    return '\n'.join([table_header] + table_rows)
+table.test = lambda call: call == 'table'    
+
+accessor.test = lambda call: call.startswith('.')
+
+FULL_LIST_FILTERS = [flat, table]
+PER_ITEM_FILTERS = [keys, accessor]
+
+def execute_filter(data, filter_line):
+    full_list_filters_ok = False
+    for filter_fn in FULL_LIST_FILTERS:
+        if filter_fn.test(filter_line):
+            full_list_filters_ok = True
+            return filter_fn(data, filter_line)
+    if not full_list_filters_ok:
+        for filter_fn in PER_ITEM_FILTERS:
+            if filter_fn.test(filter_line):
+                return [filter_fn(item, filter_line) for item in data]
+    raise ValueError(('Unknown filter:',filter_line))
+
+def main(args):
+    if len(args) < 2:
+        print('Usage:', sys.argv[0], 'filters file_path')
+        return
+    filters = [f for f in args[0].split('|') if len(f) > 0]
+    with open(args[1], 'rb') as f:
+        data = [pickle.load(f)]
+    for filter_line in filters:
+        data = execute_filter(data, filter_line)
+    pretty_printer = pprint.PrettyPrinter(indent=4)
+    if type(data) is str:
+        print(data)
+    else:
+        for datum in data:
+            pretty_printer.pprint(datum)
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
