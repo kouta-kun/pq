@@ -11,6 +11,7 @@ setup(name='pq-tool',
       author='Salvador Pardiñas',
       author_email='darkfm@vera.com.uy',
       scripts=['bin/pq'],
+      url='https://github.com/kouta-kun/pq',
       long_description=long_description,
       long_description_content_type='text/markdown'
 )
