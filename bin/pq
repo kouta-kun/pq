@@ -4,6 +4,12 @@ import pickle
 import pprint
 import sys
 import functools
+import argparse
+
+def execute_filter_singledatum(item, filter_line):
+    for filter_fn in PER_ITEM_FILTERS:
+        if filter_fn.test(filter_line):
+            return filter_fn(item, filter_line)
 
 def keys(d, _):
     if type(d) is list:
@@ -25,6 +31,7 @@ def accessor(d, key):
         return d[key]
     else:
         return getattr(d,key)
+accessor.test = lambda call: call.startswith('.')
 
 def center_pad(string, length):
     padding = length - len(string)
@@ -33,25 +40,48 @@ def center_pad(string, length):
     string = (' '*left_padding) + string + (' '*right_padding)
     assert len(string) == length, f'{len(string)} != {length} // {padding}'
     return string
-    
-def table(items, _):
+
+def pretty(items):
+    pretty_printer = pprint.PrettyPrinter(indent=4)
+    for datum in items:
+        pretty_printer.pprint(datum)
+
+def table(items):
     keys_items = [set(item.keys()) for item in items]
     keys_items = sorted(functools.reduce(lambda x,y:x&y, keys_items))
+
+    keys_items_originalorder = list(items[0].keys())
+    
+    keys_items.sort(key=lambda x: keys_items_originalorder.index(x))
 
     table_values = {k: [repr(item[k]) for item in items] for k in keys_items}
 
     table_lengths = {k: max(len(k), *[len(v) for v in table_values[k]]) for k in keys_items}
 
     table_header = "|" + '|'.join([center_pad(k, table_lengths[k]) for k in keys_items]) + '|'
+    table_divisor = "|" + '|'.join(["="*table_lengths[k] for k in keys_items]) + "|"
     table_rows = ["|" + '|'.join([center_pad(repr(item[k]), table_lengths[k]) for k in keys_items]) + '|' for item in items]
 
-    return '\n'.join([table_header] + table_rows)
-table.test = lambda call: call == 'table'    
+    print('\n'.join([table_header,table_divisor] + table_rows))
 
-accessor.test = lambda call: call.startswith('.')
+def sort(items, sortexpr):
+    sortexpr = sortexpr[5:-1]
+    items.sort(key=lambda d: execute_filter_singledatum(d, sortexpr))
+    return items
+sort.test = lambda call: call.startswith('sort(') and call.endswith(')')
 
-FULL_LIST_FILTERS = [flat, table]
-PER_ITEM_FILTERS = [keys, accessor]
+def evaluate(item, evalexpr):
+    evalexpr = evalexpr[5:-1]
+    evalexpr = compile(evalexpr, '<filter expression>', 'eval')
+
+    item = eval(evalexpr,
+                  {'__builtins__': {}},
+                  {'i': item})
+    return item
+evaluate.test = lambda call: call.startswith('eval(') and call.endswith(')')
+
+FULL_LIST_FILTERS = [flat, sort]
+PER_ITEM_FILTERS = [keys, accessor, evaluate]
 
 def execute_filter(data, filter_line):
     full_list_filters_ok = False
@@ -60,26 +90,34 @@ def execute_filter(data, filter_line):
             full_list_filters_ok = True
             return filter_fn(data, filter_line)
     if not full_list_filters_ok:
-        for filter_fn in PER_ITEM_FILTERS:
-            if filter_fn.test(filter_line):
-                return [filter_fn(item, filter_line) for item in data]
+        return [execute_filter_singledatum(item, filter_line) for item in data]
     raise ValueError(('Unknown filter:',filter_line))
 
-def main(args):
-    if len(args) < 2:
-        print('Usage:', sys.argv[0], 'filters file_path')
-        return
-    filters = [f for f in args[0].split('|') if len(f) > 0]
-    with open(args[1], 'rb') as f:
-        data = [pickle.load(f)]
+def get_args():
+    parser = argparse.ArgumentParser(description='Pickle Query Tool')
+
+    parser.add_argument('filters', type=str, nargs=1)
+    parser.add_argument('file', type=str, nargs='?',
+                        default=None)
+
+    parser.add_argument('--format', '-f', type=str, default='pretty')
+
+    return parser.parse_args()
+
+def main():
+    args = get_args()
+    filters = [f for f in args.filters[0].split('|') if len(f) > 0]
+    formats = {'pretty': pretty, 'table': table}
+    if args.file is not None:
+        with open(args.file, 'rb') as f:
+            data = [pickle.load(f)]
+    else:
+        data = [pickle.loads(sys.stdin.buffer.read())]
+
     for filter_line in filters:
         data = execute_filter(data, filter_line)
-    pretty_printer = pprint.PrettyPrinter(indent=4)
-    if type(data) is str:
-        print(data)
-    else:
-        for datum in data:
-            pretty_printer.pprint(datum)
+
+    formats[args.format](data)    
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main()
